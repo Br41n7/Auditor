@@ -1,0 +1,20 @@
+{
+  "tables": {
+    "profiles": {
+      "columns": {"id": "uuid", "role": "text"},
+      "primary_key": ["id"]
+    },
+    "orders": {
+      "columns": {"id": "uuid", "user_id": "uuid", "payment_id": "uuid", "amount": "numeric", "status": "text"},
+      "primary_key": ["id"]
+    },
+    "payments": {
+      "columns": {"id": "uuid", "order_id": "uuid", "amount": "numeric", "status": "text"},
+      "primary_key": ["id"]
+    },
+    "wallets": {
+      "columns": {"id": "uuid", "user_id": "uuid", "balance": "numeric"},
+      "primary_key": ["id"]
+    }
+  }
+}

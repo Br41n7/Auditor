@@ -1,0 +1,20 @@
+{
+  "variables": {
+    "order_a": "ORDER_ID_A",
+    "payment_ref": "PAYMENT_REFERENCE",
+    "user_a": "USER_ID_A",
+    "user_b": "USER_ID_B"
+  },
+  "resources": [
+    {"name": "order", "path": "/api/orders/{order_a}", "token": "a"},
+    {"name": "payment", "path": "/api/payments/{payment_ref}", "token": "a"}
+  ],
+  "assertions": [
+    {"type": "allowed_values", "resource": "order", "field": "status", "values": ["pending", "paid", "cancelled", "refunded"]},
+    {"type": "equal", "left": "order.amount", "right": "payment.amount"},
+    {"type": "equal", "left": "order.currency", "right": "payment.currency"}
+  ],
+  "authorization": [
+    {"path": "/api/orders/{id}", "id_a": "ORDER_ID_A", "id_b": "ORDER_ID_B"}
+  ]
+}

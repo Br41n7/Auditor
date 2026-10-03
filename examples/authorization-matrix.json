@@ -1,0 +1,10 @@
+{
+  "cases": [
+    {
+      "name": "order-cross-account-read",
+      "path": "/api/orders/{id}",
+      "a": {"id": "ORDER_A"},
+      "b": {"id": "ORDER_B"}
+    }
+  ]
+}

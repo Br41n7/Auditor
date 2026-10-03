@@ -1,0 +1,6 @@
+{
+  "target": "https://staging.example.com",
+  "profile": "generic",
+  "rate": 4.0,
+  "concurrency": 4
+}

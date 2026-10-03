@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "auditor"
+version = "0.12.0"
+description = "Reusable, authorization-focused web and Supabase security auditing CLI for projects you own or are authorized to test."
+requires-python = ">=3.10"
+dependencies = ["requests>=2.31,<3"]
+authors = [{name = "Auditor"}]
+
+[project.scripts]
+auditor = "auditor.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["auditor*"]
+
+[tool.setuptools.package-data]
+auditor = ["profiles/*.json", "profiles/*.md"]
