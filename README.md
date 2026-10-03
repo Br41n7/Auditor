@@ -19,7 +19,7 @@ draws its candidate paths/parameters from what's actually there:
 See what it found before running anything:
 
 ```bash
-auditor --target https://trendingevent.com.ng map
+auditor --target https://targeturl.com map
 ```
 
 Then every check filters that discovered map for what's relevant to
@@ -48,9 +48,9 @@ Instead of retyping `--target`/`--profile`/`--rate` every time you switch
 between projects, save non-secret settings per project once:
 
 ```bash
-cp auditor/profiles/example.json auditor/profiles/trendingevent.json
+cp auditor/profiles/example.json auditor/profiles/targeturl.json
 # edit trendingevent.json: target, profile, rate, concurrency
-auditor --project trendingevent audit
+auditor --project targeturl audit
 ```
 
 `--project` also accepts a plain file path (`--project ./client-a.json`)
@@ -65,7 +65,7 @@ See `auditor/profiles/README.md` for details.
 in parallel:
 
 ```bash
-auditor --project trendingevent --concurrency 8 recon
+auditor --project targeturl --concurrency 8 recon
 ```
 
 `--rate` (requests/second) is still enforced as a shared budget across
@@ -151,7 +151,7 @@ auditor --target https://example.test fuzz
 auditor list-checks
 
 # equivalently, once a profile file exists:
-auditor --project trendingevent audit --concurrency 6
+auditor --project example audit --concurrency 6
 ```
 
 ## Supabase
