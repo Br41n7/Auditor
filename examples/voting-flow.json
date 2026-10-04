@@ -1,0 +1,18 @@
+{
+  "variables": {
+    "candidate_a": "CANDIDATE_ID_A",
+    "poll_id": "POLL_ID"
+  },
+  "resources": [
+    {"name": "candidate", "path": "/api/candidates/{candidate_a}", "token": "a"},
+    {"name": "poll", "path": "/api/polls/{poll_id}", "token": "a"}
+  ],
+  "assertions": [
+    {"type": "nonnegative", "resource": "candidate", "field": "data.vote_count"},
+    {"type": "allowed_values", "resource": "poll", "field": "data.status", "values": ["draft", "open", "closed", "archived"]}
+  ],
+  "authorization": [
+    {"path": "/api/ballots/{id}", "id_a": "BALLOT_ID_A", "id_b": "BALLOT_ID_B"},
+    {"path": "/api/votes/{id}", "id_a": "VOTE_ID_A", "id_b": "VOTE_ID_B"}
+  ]
+}

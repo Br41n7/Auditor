@@ -18,7 +18,8 @@ def _entity_for_path(path):
     for p in parts:
         if p.endswith("s") and len(p) > 1:
             return p[:-1]
-        if p in {"order", "payment", "product", "event", "ticket", "wallet", "withdrawal", "purchase", "review", "user", "profile", "seller", "vendor"}:
+        if p in {"order", "payment", "product", "event", "ticket", "wallet", "withdrawal", "purchase", "review", "user", "profile", "seller", "vendor",
+                 "vote", "poll", "ballot", "candidate", "contestant", "nominee", "election"}:
             return p
     return None
 

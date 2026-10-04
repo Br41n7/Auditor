@@ -119,16 +119,63 @@ def _infer_relationships(tables):
         if k not in seen: seen.add(k); out.append(r)
     return out
 
-def build_supabase_map_from_schema(data):
-    tables=_parse_schema_json(data)
-    rel=_infer_relationships(tables)
-    candidates=[]
+def _resolve_owner_chain(start_table, tables_by_name, rel_by_source, max_hops=3):
+    """BFS outward from start_table along foreign-key relationships looking
+    for a table with a direct owner column -- e.g. payments (no owner
+    column itself) -> orders (via order_id) -> has user_id.
+
+    Returns (hops, owner_column) where hops is the list of Relationship
+    objects traversed to get there, or (None, None) if nothing is found
+    within max_hops. This is what lets the planner generate a safe
+    cross-user test for tables like `payments` that only own a user
+    indirectly through another table, instead of giving up on them.
+    """
+    start = tables_by_name.get(start_table.lower())
+    if start and start.owner_fields:
+        return [], start.owner_fields[0]
+    visited = {start_table}
+    frontier = [(start_table, [])]
+    for _ in range(max_hops):
+        next_frontier = []
+        for table_name, path in frontier:
+            for rel in rel_by_source.get(table_name, []):
+                if rel.target_table in visited:
+                    continue
+                visited.add(rel.target_table)
+                hops = path + [rel]
+                target = tables_by_name.get(rel.target_table.lower())
+                if target and target.owner_fields:
+                    return hops, target.owner_fields[0]
+                next_frontier.append((rel.target_table, hops))
+        frontier = next_frontier
+        if not frontier:
+            break
+    return None, None
+
+def _build_rls_candidates(tables, relationships, max_hops=3):
+    tables_by_name = {t.name.lower(): t for t in tables}
+    rel_by_source = {}
+    for r in relationships:
+        rel_by_source.setdefault(r.source_table, []).append(r)
+    candidates = []
     for t in tables:
         if t.owner_fields:
             for owner in t.owner_fields:
-                candidates.append({"table":t.name,"owner_column":owner,"test":"cross-user-select","requires":["token_a","token_b","user_a","user_b"],"safe_method":"GET","confidence":"high"})
+                candidates.append({"table": t.name, "owner_column": owner, "owner_path": [], "test": "cross-user-select", "requires": ["token_a", "token_b", "user_a", "user_b"], "safe_method": "GET", "confidence": "high"})
+            continue
+        hops, owner_column = _resolve_owner_chain(t.name, tables_by_name, rel_by_source, max_hops)
+        if hops is not None and owner_column:
+            owner_path = [{"from_table": h.source_table, "from_column": h.source_column, "to_table": h.target_table, "to_column": h.target_column} for h in hops]
+            confidence = "high" if len(hops) == 1 else "medium"
+            candidates.append({"table": t.name, "owner_column": owner_column, "owner_path": owner_path, "test": "cross-user-select-chain", "requires": ["token_a", "token_b", "user_a", "user_b"], "safe_method": "GET", "confidence": confidence})
         elif t.primary_keys:
-            candidates.append({"table":t.name,"owner_column":None,"test":"manual-authorization-review","requires":["token_a","token_b","fixture_a","fixture_b"],"safe_method":"GET","confidence":"medium"})
+            candidates.append({"table": t.name, "owner_column": None, "owner_path": None, "test": "manual-authorization-review", "requires": ["token_a", "token_b", "fixture_a", "fixture_b"], "safe_method": "GET", "confidence": "medium"})
+    return candidates
+
+def build_supabase_map_from_schema(data):
+    tables=_parse_schema_json(data)
+    rel=_infer_relationships(tables)
+    candidates=_build_rls_candidates(tables, rel)
     return SupabaseMap(tables,rel,candidates,"schema")
 
 def build_supabase_map_from_postgrest(doc):
@@ -150,9 +197,7 @@ def build_supabase_map_from_postgrest(doc):
     unique={t.name:t for t in tables}
     result=SupabaseMap(list(unique.values()),[],[],"postgrest-openapi")
     result.relationships=_infer_relationships(result.tables)
-    for t in result.tables:
-        for owner in t.owner_fields:
-            result.rls_candidates.append({"table":t.name,"owner_column":owner,"test":"cross-user-select","requires":["token_a","token_b","user_a","user_b"],"safe_method":"GET","confidence":"high"})
+    result.rls_candidates=_build_rls_candidates(result.tables, result.relationships)
     return result
 
 def load_schema(path):

@@ -11,7 +11,7 @@ PROFILES_DIR = Path(__file__).resolve().parent / "profiles"
 # or --flags, never from a file you might commit or hand to a teammate.
 FILE_SETTABLE_FIELDS = {
     "target", "supabase_url", "profile", "timeout", "rate",
-    "concurrency", "verify_tls", "max_pages", "max_depth",
+    "concurrency", "verify_tls", "max_pages", "max_depth", "strict_crawl",
 }
 
 def clean_url(value):
@@ -39,6 +39,7 @@ class Config:
     paystack_secret_key: str = ""
     max_pages: int = 60
     max_depth: int = 3
+    strict_crawl: bool = False
 
     @classmethod
     def from_env(cls, config_path=None):

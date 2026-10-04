@@ -1,4 +1,4 @@
-# auditor v0.8.0
+# auditor v0.14.0
 
 Reusable, **read-only-first** security auditing CLI for authorized testing of web applications, REST APIs and Supabase-backed projects.
 
@@ -19,7 +19,7 @@ draws its candidate paths/parameters from what's actually there:
 See what it found before running anything:
 
 ```bash
-auditor --target https://targeturl.com map
+auditor --target https://trendingevent.com.ng map
 ```
 
 Then every check filters that discovered map for what's relevant to
@@ -48,9 +48,9 @@ Instead of retyping `--target`/`--profile`/`--rate` every time you switch
 between projects, save non-secret settings per project once:
 
 ```bash
-cp auditor/profiles/example.json auditor/profiles/targeturl.json
+cp auditor/profiles/example.json auditor/profiles/trendingevent.json
 # edit trendingevent.json: target, profile, rate, concurrency
-auditor --project targeturl audit
+auditor --project trendingevent audit
 ```
 
 `--project` also accepts a plain file path (`--project ./client-a.json`)
@@ -65,7 +65,7 @@ See `auditor/profiles/README.md` for details.
 in parallel:
 
 ```bash
-auditor --project targeturl --concurrency 8 recon
+auditor --project trendingevent --concurrency 8 recon
 ```
 
 `--rate` (requests/second) is still enforced as a shared budget across
@@ -151,7 +151,7 @@ auditor --target https://example.test fuzz
 auditor list-checks
 
 # equivalently, once a profile file exists:
-auditor --project example audit --concurrency 6
+auditor --project trendingevent audit --concurrency 6
 ```
 
 ## Supabase
@@ -260,3 +260,108 @@ auditor --supabase-url https://YOUR_PROJECT.supabase.co --anon-key "$SUPABASE_AN
 ```
 
 The mapper identifies tables, likely owner columns, simple foreign-key relationships, and safe RLS test candidates. It does not modify rows or policies.
+
+## v0.13 — RLS/BOLA test plans from the relationship graph
+
+Mapping the schema is only half the job -- v0.13 turns the relationship
+graph into an actual test plan, including tables that don't own a user
+*directly*. A `payments` table with only `order_id` (no `user_id` of its
+own) still gets a correct test, by walking the graph to `orders.user_id`
+and building the matching PostgREST embedded-resource filter:
+
+```bash
+# See the plan -- no network calls, nothing executes:
+auditor supabase plan --schema examples/supabase-schema.json
+auditor supabase plan --schema examples/supabase-schema.json --out plan.json
+
+# Run it -- one cross-user GET per table, direct or via its FK chain,
+# using the same two test-account user ids you'd use for any other
+# two-account test on this project:
+auditor --supabase-url https://YOUR_PROJECT.supabase.co \
+  --anon-key "$AUDITOR_SUPABASE_ANON_KEY" \
+  --token-a "$AUDITOR_TOKEN_A" --token-b "$AUDITOR_TOKEN_B" \
+  supabase sweep --schema examples/supabase-schema.json \
+  --user-a "$USER_A_ID" --user-b "$USER_B_ID"
+```
+
+This replaces running `auditor rls --table X --user-column Y ...` by
+hand once per table. A table with neither a direct owner column nor a
+resolvable relationship chain is reported as needing manual review
+(with a two-fixture-ID test, same as the existing `rls` command)
+rather than silently skipped.
+
+**Accuracy note:** a positive finding here is only reported once a
+returned row is verified to actually carry the targeted user's id --
+not just "did the filtered request return anything." A server that
+ignores the filter entirely and always returns the caller's own rows
+(correct behavior) is not flagged; only rows actually belonging to the
+other user are.
+
+## Voting-process checks
+
+`vote`, `poll`, `ballot`, `candidate`, `contestant`, `nominee` and
+`election` are now recognized entity names, so the existing crawler,
+`matrix --candidates`, and `prove cross-user` tooling automatically
+picks up voting endpoints with no extra configuration -- e.g.
+`/api/votes/{id}` becomes a BOLA candidate the same way `/api/orders/{id}`
+already does.
+
+On top of that, a dedicated `voting.surface` check looks for the
+signals specific to voting bugs, all read-only -- it never submits a
+vote, since even one real vote during testing would affect a live
+contest's result:
+
+- discovers vote/poll/ballot-shaped endpoints (purely from the crawl -- there is no hardcoded `/api/vote`-style guess list) and whether they're reachable without credentials
+- flags a vote form (`<form method="POST">` targeting a vote/ballot path) with no CSRF-token-looking hidden field
+- notes when a voting endpoint has none of the standard rate-limit response headers (an informational signal, not proof vote-stuffing works)
+- flags session/identity-looking cookies missing `Secure`/`HttpOnly`/`SameSite` on voting pages -- a fixed or exposed session enables repeat voting under one identity
+
+**This check only runs when the crawl itself gives real evidence the
+target is a voting platform.** It never fires against a generic site on
+the off chance it happens to be one: a target needs either one
+unambiguous match (a whole path segment that's literally `vote`,
+`ballot`, or `election`) or two weaker supporting signals together
+(`poll`/`candidate`/`contestant`/`nominee`, or a matching discovered
+parameter name like `candidate_id`) before it's treated as a voting
+platform. A page that merely contains the word "poll" somewhere, or a
+path like `/apollo-docs` that happens to contain the substring "poll",
+doesn't count -- matching is whole-token, not substring. If detection
+doesn't clear the bar, `voting.surface` logs that it skipped and why,
+rather than running anyway or staying silently absent.
+
+For active checks you can't do read-only (does a second vote from the
+same account actually get rejected? does the vote count match the sum
+of ballots?), use your own test/staging environment with the business-flow
+engine -- see `examples/voting-flow.json` for a starting point (vote-count
+sanity, poll-status validity, and cross-voter ballot/vote-object access).
+
+## v0.14 — Detection-gated checks, strict crawl mode, and ID predictability
+
+Two more steps away from generic hardcoded values:
+
+**`--strict-crawl`** — every check that normally falls back to a static
+guess list when the crawl finds nothing matching (recon's baseline
+path list, `payments`/`business`/`files`/`auth`/`web`'s candidate
+paths) now skips that fallback entirely when this flag is set, and
+reports only what the crawl actually found on your project -- even if
+that's nothing. An explicit `--seed-common-paths`/`--seed-common-words`
+still works even under `--strict-crawl`, since asking for the generic
+list by name is a deliberate choice, not an implicit default. `fuzz`'s
+tiny `.env`/`.git/HEAD`/`backup` safety-net check is unaffected either
+way -- see the Attacker-perspective discovery section above for why
+that one list stays regardless.
+
+**Smarter keyword matching.** Every check that filters crawled paths by
+keyword (payments, business, files, auth, web, voting) now matches
+whole path segments instead of raw substrings, so `/apollo-docs` no
+longer false-matches the `poll` keyword the way substring containment
+would. This is what makes the voting-platform detection above reliable
+enough to gate a whole check category on.
+
+**New `authz.id-predictability` check** (always on, zero hardcoded
+values): looks at the shape of object identifiers the crawl actually
+saw in discovered paths -- small sequential numbers (`/api/orders/482`)
+versus opaque UUIDs -- and flags when IDs look sequential, since that
+makes IDOR/BOLA enumeration far easier once a single valid ID leaks.
+Purely a report on what the crawl observed; it never guesses or
+enumerates IDs itself.

@@ -20,7 +20,11 @@ ENTITY_WORDS = {"users":"user", "user":"user", "profiles":"profile", "profile":"
                 "events":"event", "event":"event", "wallets":"wallet", "wallet":"wallet",
                 "withdrawals":"withdrawal", "withdrawal":"withdrawal", "purchases":"purchase",
                 "purchase":"purchase", "vendors":"vendor", "vendor":"vendor", "sellers":"seller",
-                "seller":"seller", "reviews":"review", "review":"review"}
+                "seller":"seller", "reviews":"review", "review":"review",
+                "votes":"vote", "vote":"vote", "polls":"poll", "poll":"poll",
+                "ballots":"ballot", "ballot":"ballot", "candidates":"candidate", "candidate":"candidate",
+                "contestants":"contestant", "contestant":"contestant", "nominees":"nominee", "nominee":"nominee",
+                "elections":"election", "election":"election"}
 
 @dataclass
 class Endpoint:

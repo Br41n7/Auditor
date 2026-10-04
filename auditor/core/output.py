@@ -44,7 +44,7 @@ class Reporter:
     def as_dict(self):
         return {
             "tool": "auditor",
-            "version": "0.11.0",
+            "version": "0.14.0",
             "findings": [f.as_dict() for f in self.findings],
             "summary": self.summary(),
         }

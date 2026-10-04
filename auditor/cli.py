@@ -18,6 +18,7 @@ from .reporting import render_markdown
 from .mapping import build_attack_map
 from .authorization.matrix import generate_candidates, run_matrix
 from .supabase.schema_map import load_schema, build_supabase_map_from_postgrest
+from .supabase.planner import plan_as_dict, write_plan, run_sweep
 
 # Commands that operate against --target and benefit from crawling it first.
 _CRAWLABLE_COMMANDS = {"audit", "recon", "fuzz", "app", "business", "fuzz-input", "map", "prove", "matrix"}
@@ -30,6 +31,7 @@ def build_parser():
     p.add_argument("--timeout", type=float); p.add_argument("--rate", type=float)
     p.add_argument("--concurrency", type=int, help="Parallel requests for crawl/recon/fuzz (default 1 = sequential). The --rate limit is still enforced across all workers combined.")
     p.add_argument("--no-crawl", action="store_true", help="Skip crawling the target; checks fall back to their static guess lists instead of paths/params discovered from your project.")
+    p.add_argument("--strict-crawl", action="store_true", help="Never fall back to a generic hardcoded path/param list when the crawl finds nothing matching -- checks report only what was actually discovered on this target, even if that's nothing. Does not affect explicit --seed-common-* flags or the fuzz safety-net artifact list.")
     p.add_argument("--max-pages", type=int, help="Cap on pages the crawler fetches (default 60).")
     p.add_argument("--max-depth", type=int, help="Cap on link-following depth while crawling (default 3).")
     p.add_argument("--seed-common-paths", action="store_true", help="Also probe a generic baseline path list alongside whatever the crawl discovers.")
@@ -60,6 +62,17 @@ def build_parser():
     sm = sup_sub.add_parser("map", help="Map Supabase tables/relationships from a supplied schema or PostgREST OpenAPI")
     sm.add_argument("--schema", help="Path to a portable schema JSON; no network requests are made")
     sm.add_argument("--postgrest", action="store_true", help="Fetch PostgREST OpenAPI with GET using the supplied anon key")
+    sp = sup_sub.add_parser("plan", help="Generate a safe RLS/BOLA test plan from the schema's relationship graph -- no tokens or network calls required")
+    sp.add_argument("--schema", help="Path to a portable schema JSON; no network requests are made")
+    sp.add_argument("--postgrest", action="store_true", help="Fetch PostgREST OpenAPI with GET using the supplied anon key")
+    sp.add_argument("--tables", help="Comma-separated subset of tables to plan for (default: all)")
+    sp.add_argument("--out", help="Write the plan JSON to this file instead of printing it")
+    sw = sup_sub.add_parser("sweep", help="Execute the RLS/BOLA test plan: one cross-user GET per table, direct or via its relationship chain")
+    sw.add_argument("--schema", help="Path to a portable schema JSON; no network requests are made for the map itself")
+    sw.add_argument("--postgrest", action="store_true", help="Fetch PostgREST OpenAPI with GET using the supplied anon key")
+    sw.add_argument("--tables", help="Comma-separated subset of tables to sweep (default: all)")
+    sw.add_argument("--user-a", required=True, help="Account A's own user id/uuid (the value its owner columns hold)")
+    sw.add_argument("--user-b", required=True, help="Account B's own user id/uuid -- the sweep checks whether token A can read rows belonging to this user")
     pay = sub.add_parser("payments")
     pay.add_argument("--reference", help="Your own Paystack transaction reference for read-only verification")
     pay.add_argument("--expected-amount", help="Expected gateway amount in subunits, e.g. 500000 for NGN 5,000")
@@ -82,6 +95,7 @@ def main(argv=None):
     if args.supabase_url: cfg.supabase_url = require_http_url(args.supabase_url, "supabase-url")
     for attr, val in (("anon_key",args.anon_key),("access_token",args.token),("token_a",args.token_a),("token_b",args.token_b),("timeout",args.timeout),("rate",args.rate),("concurrency",args.concurrency),("paystack_secret_key", args.paystack_secret_key),("profile", args.profile),("max_pages", args.max_pages),("max_depth", args.max_depth)):
         if val is not None: setattr(cfg, attr, val)
+    if args.strict_crawl: cfg.strict_crawl = True
     cfg.verify_tls = not args.insecure; cfg.json_output = args.json_output
     concurrency = max(cfg.concurrency or 1, 1)
     if not args.command: build_parser().print_help(); return 2
@@ -95,12 +109,13 @@ def main(argv=None):
     try:
         if args.command == "flow":
             if not cfg.target: raise ValueError("A target is required. Use --target, a --project profile, or AUDITOR_TARGET.")
-            client=HTTPClient(cfg.target,cfg.timeout,cfg.rate,cfg.verify_tls,user_agent="auditor/0.12")
+            client=HTTPClient(cfg.target,cfg.timeout,cfg.rate,cfg.verify_tls,user_agent="auditor/0.14")
             run_flow(client, reporter, args.spec, cfg.token_a, cfg.token_b)
         elif args.command in {"audit","recon","headers","fuzz","app","fuzz-input","idor","business","map","prove","matrix"}:
             if not cfg.target: raise ValueError("A target is required. Use --target, a --project profile, or AUDITOR_TARGET.")
-            client=HTTPClient(cfg.target,cfg.timeout,cfg.rate,cfg.verify_tls,user_agent="auditor/0.12")
+            client=HTTPClient(cfg.target,cfg.timeout,cfg.rate,cfg.verify_tls,user_agent="auditor/0.14")
             client.discovered = None
+            client.strict_crawl = cfg.strict_crawl
             if not args.no_crawl and args.command in _CRAWLABLE_COMMANDS:
                 client.discovered = crawl(client, reporter, max_pages=cfg.max_pages, max_depth=cfg.max_depth, concurrency=concurrency)
             elif args.command in {"audit","recon"}:
@@ -145,7 +160,7 @@ def main(argv=None):
                     run_matrix(client, reporter, args.spec, cfg.token_a, cfg.token_b)
             if args.command in {"audit","recon"}:
                 paths = list(client.discovered.all_paths()) if client.discovered else []
-                if args.seed_common_paths or not paths:
+                if args.seed_common_paths or (not paths and not cfg.strict_crawl):
                     paths = list(dict.fromkeys(paths + FALLBACK_COMMON_PATHS))
                 endpoint_scan(client,reporter,paths,concurrency=concurrency)
             if args.command in {"audit","headers"}: header_scan(client,reporter)
@@ -174,29 +189,34 @@ def main(argv=None):
         elif args.command == "payments":
             if not args.reference:
                 raise ValueError("payments requires --reference for read-only Paystack verification")
-            pay_client=HTTPClient("https://api.paystack.co", cfg.timeout, cfg.rate, cfg.verify_tls, user_agent="auditor/0.12")
+            pay_client=HTTPClient("https://api.paystack.co", cfg.timeout, cfg.rate, cfg.verify_tls, user_agent="auditor/0.14")
             verify_paystack_transaction(pay_client, reporter, cfg.paystack_secret_key, args.reference, args.expected_amount, args.expected_currency)
         elif args.command == "supabase":
-            if args.supabase_command == "map" and args.schema and not args.postgrest:
-                smap = load_schema(args.schema)
-            else:
+            cmd = args.supabase_command
+            needs_schema = cmd in {"map", "plan", "sweep"}
+            # sweep always needs a live client to execute the probes, even
+            # when the schema itself came from a local file; map/plan only
+            # need one if --postgrest discovery was requested.
+            needs_client = cmd in (None, "audit", "sweep") or (needs_schema and args.postgrest)
+            smap = None
+            client = None
+            if needs_client:
                 if not cfg.supabase_url: raise ValueError("Supabase URL is required.")
                 client=HTTPClient(cfg.supabase_url,cfg.timeout,cfg.rate,cfg.verify_tls)
-                if args.supabase_command in (None, "audit"):
-                    supabase_audit(client,reporter,cfg.anon_key,cfg.access_token)
-                    smap = None
-                elif args.supabase_command == "map":
-                    if args.schema:
-                        smap = load_schema(args.schema)
-                    elif args.postgrest:
-                        if not cfg.anon_key: raise ValueError("--postgrest mapping requires --anon-key (read-only).")
-                        r=client.request("GET", "/rest/v1/", headers={"apikey":cfg.anon_key,"Accept":"application/json"}, allow_redirects=False)
-                        if r.status_code != 200: raise ValueError(f"PostgREST OpenAPI request returned HTTP {r.status_code}")
-                        try: doc=r.json()
-                        except Exception as exc: raise ValueError("PostgREST did not return JSON") from exc
-                        smap=build_supabase_map_from_postgrest(doc)
-                    else:
-                        raise ValueError("supabase map requires --schema FILE or --postgrest")
+            if cmd in (None, "audit"):
+                supabase_audit(client,reporter,cfg.anon_key,cfg.access_token)
+            elif needs_schema:
+                if args.schema:
+                    smap = load_schema(args.schema)
+                elif args.postgrest:
+                    if not cfg.anon_key: raise ValueError("--postgrest mapping requires --anon-key (read-only).")
+                    r=client.request("GET", "/rest/v1/", headers={"apikey":cfg.anon_key,"Accept":"application/json"}, allow_redirects=False)
+                    if r.status_code != 200: raise ValueError(f"PostgREST OpenAPI request returned HTTP {r.status_code}")
+                    try: doc=r.json()
+                    except Exception as exc: raise ValueError("PostgREST did not return JSON") from exc
+                    smap=build_supabase_map_from_postgrest(doc)
+                else:
+                    raise ValueError(f"supabase {cmd} requires --schema FILE or --postgrest")
             if args.supabase_command == "map":
                 if args.json_output:
                     print(__import__("json").dumps(smap.as_dict(), indent=2))
@@ -212,7 +232,18 @@ def main(argv=None):
                     if smap.rls_candidates:
                         print("\n[RLS CANDIDATES]")
                         for c in smap.rls_candidates:
-                            print(f"  {c['table']} owner={c.get('owner_column') or 'unknown'} test={c['test']}")
+                            label = c['test'] if c['test'] != 'cross-user-select-chain' else f"cross-user-select (via {len(c['owner_path'])}-hop chain)"
+                            print(f"  {c['table']} owner={c.get('owner_column') or 'unknown'} test={label}")
+            elif args.supabase_command == "plan":
+                tables = [t.strip() for t in args.tables.split(",")] if args.tables else None
+                if args.out:
+                    write_plan(smap, args.out, tables)
+                    print(f"RLS/BOLA test plan written to {args.out} ({len(smap.rls_candidates if not tables else [c for c in smap.rls_candidates if c['table'] in tables])} case(s)).")
+                else:
+                    print(__import__("json").dumps(plan_as_dict(smap, tables), indent=2))
+            elif args.supabase_command == "sweep":
+                tables = [t.strip() for t in args.tables.split(",")] if args.tables else None
+                run_sweep(client, reporter, smap, cfg.anon_key, cfg.token_a, cfg.token_b, args.user_a, args.user_b, tables)
         elif args.command == "rls":
             if not cfg.supabase_url or not cfg.anon_key: raise ValueError("RLS checks require --supabase-url and --anon-key.")
             if not cfg.token_a or not cfg.token_b: raise ValueError("RLS checks require --token-a and --token-b.")

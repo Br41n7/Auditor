@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from typing import Callable
-from ..checks import web, auth, files, django, nextjs, payments, business
+from ..checks import web, auth, files, django, nextjs, payments, business, voting, idpredictability
 from ..checks.fuzzing import reflected_input, api_error_fuzz
 
 @dataclass(frozen=True)
@@ -21,6 +21,8 @@ REGISTRY = [
     Check("files.surface", "Upload surface discovery", "files", ("generic", "django", "nextjs"), files.upload_surface, True),
     Check("payments.surface", "Payment endpoint review", "payments", ("generic", "django", "nextjs"), payments.scan, True),
     Check("business.surface", "Business logic surface review", "business-logic", ("generic", "django", "nextjs"), business.scan, True),
+    Check("voting.surface", "Voting/polling surface review: exposure, CSRF signal, rate-limit signal, cookie flags; only runs if the crawl shows voting-platform signal", "voting", ("generic", "django", "nextjs"), voting.scan, True),
+    Check("authz.id-predictability", "Object identifier predictability signal (sequential/numeric vs opaque), purely from crawl-observed paths", "authorization", ("generic", "django", "nextjs"), idpredictability.scan, True),
     # NOTE: business-flow integrity checks are declarative/spec-driven and
     # can't be auto-run (they need a spec file only you can supply) -- use
     # `auditor flow <spec.json>` directly instead of `app`/`audit`.
